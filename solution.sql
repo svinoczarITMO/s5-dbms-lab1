@@ -19,14 +19,13 @@ begin
         from 
             pg_attribute a
         where 
-            a.attrelid = 'Н_ВЕДОМОСТИ'::regclass and 
+            a.attrelid = 'TABLE_NAME'::regclass and 
             a.attnum > 0 and 
             not a.attisdropped
         order by a.attnum
     loop
         column_number := column_number + 1;
         
-        -- Формирование строки с атрибутами
         attr_info := format('Type: %s', rec.data_type);
         if rec.comment is not null then
             attr_info := attr_info || format(' Comment: %s', rec.comment);

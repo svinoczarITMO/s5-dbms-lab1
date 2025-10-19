@@ -1,39 +1,65 @@
-do $$
-declare 
-    rec record;
-    column_number integer := 0;
-    attr_info text;
-    constraint_info text;
-begin
-    raise notice 'No.  Имя столбца                Атрибуты';
-    raise notice '---  -----------------          ------------------------------------------------------';
+CREATE OR REPLACE PROCEDURE find_tables_with_nulls(search_schema TEXT)
+LANGUAGE plpgsql
+AS $$
+DECLARE 
+    table_rec RECORD;
+    col_rec RECORD;
+    null_exists BOOLEAN;
+    counter INTEGER := 0;
+    found_any BOOLEAN := FALSE;
+    schema_oid OID;
+BEGIN
+    SELECT oid INTO schema_oid 
+    FROM pg_catalog.pg_namespace 
+    WHERE nspname = search_schema;
+    
+    IF schema_oid IS NULL THEN
+        RAISE EXCEPTION 'Схема "%" не существует', search_schema;
+    END IF;
 
-    for rec in 
-        select 
-            a.attname as column_name,
-            pg_catalog.format_type(a.atttypid, a.atttypmod) as data_type,
-            col_description(a.attrelid::regclass::oid, a.attnum) as comment,
-            (select string_agg(concat(c.conname, ' ', c.contype), ', ')
-             from pg_constraint c
-             where c.conrelid = a.attrelid and a.attnum = any(c.conkey)) as constraints
-        from 
-            pg_attribute a
-        where 
-            a.attrelid = 'TABLE_NAME'::regclass and 
-            a.attnum > 0 and 
-            not a.attisdropped
-        order by a.attnum
-    loop
-        column_number := column_number + 1;
+    RAISE NOTICE 'Схема: %', search_schema;
+    RAISE NOTICE '';
+    RAISE NOTICE 'No. Имя таблицы';
+    RAISE NOTICE '--- -------------------------------';
+
+    FOR table_rec IN 
+        SELECT c.oid AS table_oid, c.relname AS table_name
+        FROM pg_catalog.pg_class c
+        WHERE c.relnamespace = schema_oid
+        AND c.relkind = 'r'
+        ORDER BY c.relname
+    LOOP
+        null_exists := FALSE;
         
-        attr_info := format('Type: %s', rec.data_type);
-        if rec.comment is not null then
-            attr_info := attr_info || format(' Comment: %s', rec.comment);
-        end if;
-        if rec.constraints is not null then
-            attr_info := attr_info || format(' Constraints: %s', rec.constraints);
-        end if;
+        FOR col_rec IN 
+            SELECT a.attname AS column_name
+            FROM pg_catalog.pg_attribute a
+            WHERE a.attrelid = table_rec.table_oid
+            AND a.attnum > 0
+            AND NOT a.attisdropped
+        LOOP
+            BEGIN
+                EXECUTE format(
+                    'SELECT EXISTS (SELECT 1 FROM %I.%I WHERE %I IS NULL LIMIT 1)',
+                    search_schema, table_rec.table_name, col_rec.column_name
+                ) INTO null_exists;
+                
+                IF null_exists THEN
+                    counter := counter + 1;
+                    RAISE NOTICE '% %', 
+                        LPAD(counter::text, 3, ' '), 
+                        table_rec.table_name;
+                    found_any := TRUE;
+                    EXIT;
+                END IF;
+            EXCEPTION
+                WHEN OTHERS THEN
+                    null_exists := FALSE;
+            END;
+        END LOOP;
+    END LOOP;
 
-        raise notice '% %', column_number, format('%-30s  %s', rec.column_name, attr_info);
-    end loop;
-end $$;
+    IF NOT found_any THEN
+        RAISE NOTICE 'В схеме не найдено таблиц с NULL значениями';
+    END IF;
+END $$;
